@@ -1,0 +1,53 @@
+import torch
+import torch.nn as nn
+
+class CLATECell(nn.Module):
+    """One direction of the adaptive temporal encoder (Eqs. 4-9)."""
+    def __init__(self, d_f, d_h):
+        super().__init__()
+        self.W_f = nn.Linear(d_f, d_h, bias=False)
+        self.W_h = nn.Linear(d_h, d_h, bias=False)
+        self.W_s = nn.Linear(2 * d_f, d_h, bias=False)
+        self.b_g = nn.Parameter(torch.zeros(d_h))
+
+        self.W_f2 = nn.Linear(d_f, d_h, bias=False)
+        self.W_h2 = nn.Linear(d_h, d_h, bias=False)
+        self.W_s2 = nn.Linear(2 * d_f, d_h, bias=False)
+        self.b_h = nn.Parameter(torch.zeros(d_h))
+
+    def forward(self, f, h_prev, s):
+        g = torch.sigmoid(self.W_f(f) + self.W_h(h_prev) + self.W_s(s) + self.b_g)
+        h_cand = torch.tanh(self.W_f2(f) + self.W_h2(h_prev) + self.W_s2(s) + self.b_h)
+        return g * h_cand + (1 - g) * h_prev
+
+class CLATE(nn.Module):
+    """Bidirectional CLATE (Eqs. 10-13)."""
+    def __init__(self, d_f, d_h):
+        super().__init__()
+        self.d_f, self.d_h = d_f, d_h
+        self.fwd = CLATECell(d_f, d_h)
+        self.bwd = CLATECell(d_f, d_h)
+
+    @staticmethod
+    def _stats(F):
+        mu = F.mean(dim=1)
+        std = F.std(dim=1, unbiased=False) + 1e-6
+        return torch.cat([mu, std], dim=-1)        # (B, 2*d_f)
+
+    def forward(self, F):
+        # F: (B, T, d_f)
+        B, T, _ = F.shape
+        s = self._stats(F)                         # (B, 2*d_f)
+        h_f = torch.zeros(B, self.d_h, device=F.device)
+        h_b = torch.zeros(B, self.d_h, device=F.device)
+        outs_f, outs_b = [], []
+        for t in range(T):
+            h_f = self.fwd(F[:, t], h_f, s)
+            outs_f.append(h_f)
+        for t in reversed(range(T)):
+            h_b = self.bwd(F[:, t], h_b, s)
+            outs_b.append(h_b)
+        outs_b = list(reversed(outs_b))
+        H = torch.cat([torch.stack(outs_f, 1),
+                       torch.stack(outs_b, 1)], dim=-1)  # (B, T, 2*d_h)
+        return H

@@ -1,0 +1,15 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+def clser_loss(logits, z, prototypes, labels,
+               lambda_attr=0.1, lambda_sep=0.1, margin=1.0):
+    ce = F.cross_entropy(logits, labels)
+    p_y = prototypes[labels]                              # (B, d)
+    attr = ((z - p_y) ** 2).sum(dim=-1).mean()            # Eq. (20)
+    C = prototypes.size(0)
+    pd = torch.cdist(prototypes, prototypes, p=2)         # (C, C)
+    mask = ~torch.eye(C, dtype=torch.bool, device=pd.device)
+    sep = torch.clamp(margin - pd[mask], min=0).mean()    # Eq. (21)
+    total = ce + lambda_attr * attr + lambda_sep * sep
+    return total, dict(ce=ce.item(), attr=attr.item(), sep=sep.item())

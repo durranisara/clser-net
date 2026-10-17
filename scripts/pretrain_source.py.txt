@@ -1,0 +1,45 @@
+import yaml, torch, argparse
+from torch.utils.data import DataLoader
+from models.clser_net import CLSERNet
+from training.trainer import train_with_early_stopping
+from data.datasets import (EmotionDataset, collate_pad, parse_iemocap,
+                           parse_ravdess, FeatureExtractor)
+from utils.seed import set_seed
+
+def main(cfg_path):
+    cfg = yaml.safe_load(open(cfg_path))
+    set_seed(cfg["seed"]); dev = cfg["device"]
+    fx = FeatureExtractor(**{k: cfg["features"][k] for k in
+                             ["sample_rate","n_mfcc","n_mels","win_ms","hop_ms"]})
+
+    parser = {"iemocap": parse_iemocap, "ravdess": parse_ravdess}
+    src = cfg["scenarios"][0]["source"]     # TODO: pass as arg to switch source
+    items = parser[src](cfg["data"][f"{src}_root"])
+    ds = EmotionDataset(items, fx, cfg["features"]["sample_rate"])
+    n = len(ds); tr, va = int(0.7*n), int(0.15*n)
+    g = torch.Generator().manual_seed(cfg["seed"])
+    tr_ds, va_ds, _ = torch.utils.data.random_split(ds, [tr, va, n-tr-va], generator=g)
+
+    tl = DataLoader(tr_ds, batch_size=cfg["training"]["batch_size"],
+                    shuffle=True, collate_fn=collate_pad)
+    vl = DataLoader(va_ds, batch_size=cfg["training"]["batch_size"],
+                    shuffle=False, collate_fn=collate_pad)
+
+    model = CLSERNet(d_h=cfg["model"]["d_h"],
+                     num_emotions=cfg["model"]["num_emotions"],
+                     dropout=cfg["model"]["dropout"],
+                     temperature=cfg["model"]["temperature"]).to(dev)
+    opt = torch.optim.Adam(model.parameters(), lr=cfg["training"]["eta_base"],
+                           weight_decay=cfg["training"]["weight_decay"])
+    model = train_with_early_stopping(
+        model, tl, vl, opt, cfg["training"]["pretrain_epochs"], dev,
+        patience=cfg["training"]["early_stop_patience"],
+        lambda_attr=cfg["loss"]["lambda_attr"],
+        lambda_sep=cfg["loss"]["lambda_sep"],
+        margin=cfg["loss"]["margin"])
+    torch.save(model.state_dict(), f"ckpt_pretrain_{src}.pt")
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--config", default="configs/default.yaml")
+    main(ap.parse_args().config)

@@ -1,0 +1,39 @@
+import yaml, torch, argparse
+from torch.utils.data import DataLoader
+from models.clser_net import CLSERNet
+from training.trainer import run_epoch
+from data.datasets import (EmotionDataset, collate_pad, parse_emodb,
+                           parse_urdu, FeatureExtractor)
+
+def main(cfg_path, scenario_name):
+    cfg = yaml.safe_load(open(cfg_path))
+    dev = cfg["device"]
+    sc = next(s for s in cfg["scenarios"] if s["name"] == scenario_name)
+    fx = FeatureExtractor(**{k: cfg["features"][k] for k in
+                             ["sample_rate","n_mfcc","n_mels","win_ms","hop_ms"]})
+    parser = {"emodb": parse_emodb, "urdu": parse_urdu}
+    items = parser[sc["target"]](cfg["data"][f"{sc['target']}_root"])
+    ds = EmotionDataset(items, fx, cfg["features"]["sample_rate"])
+    n = len(ds); tr, va = int(0.7*n), int(0.15*n)
+    g = torch.Generator().manual_seed(cfg["seed"])
+    _, _, te_ds = torch.utils.data.random_split(ds, [tr, va, n-tr-va], generator=g)
+    te = DataLoader(te_ds, batch_size=cfg["training"]["batch_size"],
+                    shuffle=False, collate_fn=collate_pad)
+
+    model = CLSERNet(d_h=cfg["model"]["d_h"],
+                     num_emotions=cfg["model"]["num_emotions"],
+                     dropout=cfg["model"]["dropout"],
+                     temperature=cfg["model"]["temperature"]).to(dev)
+    model.load_state_dict(torch.load(f"ckpt_adapted_{sc['name']}.pt"))
+    m = run_epoch(model, te, dev, None,
+                  lambda_attr=cfg["loss"]["lambda_attr"],
+                  lambda_sep=cfg["loss"]["lambda_sep"],
+                  margin=cfg["loss"]["margin"])
+    print({k: round(v, 4) for k, v in m.items()})
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--config", default="configs/default.yaml")
+    ap.add_argument("--scenario", required=True, choices=["EN_DE","EN_UR","RAV_DE","RAV_UR"])
+    a = ap.parse_args()
+    main(a.config, a.scenario)

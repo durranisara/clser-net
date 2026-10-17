@@ -1,0 +1,22 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class EPRA(nn.Module):
+    def __init__(self, d, num_emotions, temperature=0.1):
+        super().__init__()
+        self.tau = temperature
+        self.prototypes = nn.Parameter(torch.empty(num_emotions, d))
+        nn.init.xavier_uniform_(self.prototypes)
+        self.saliency = nn.Linear(num_emotions, 1)
+
+    def forward(self, H):
+        # H: (B, T, d)
+        Hn = F.normalize(H, dim=-1)                       # l2-normalized
+        Pn = F.normalize(self.prototypes, dim=-1)         # (C, d)
+        r = torch.einsum("btd,cd->btc", Hn, Pn)           # (B, T, C) cosine sim
+        a = torch.softmax(r / self.tau, dim=-1)           # (B, T, C)
+        s = self.saliency(a).squeeze(-1)                  # (B, T)
+        beta = torch.softmax(s, dim=-1)                   # (B, T)
+        z = torch.einsum("bt,btd->bd", beta, H)           # (B, d)
+        return z, a

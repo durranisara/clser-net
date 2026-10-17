@@ -1,0 +1,35 @@
+import torch
+import torchaudio
+import torchaudio.transforms as T
+
+class FeatureExtractor:
+    """MFCC(39) + log-mel(64) -> fused 103-dim, with utterance-level normalization."""
+
+    def __init__(self, sample_rate=16000, n_mfcc=13, n_mels=64,
+                 win_ms=25, hop_ms=10):
+        self.sr = sample_rate
+        n_fft = int(sample_rate * win_ms / 1000)
+        hop = int(sample_rate * hop_ms / 1000)
+        self.n_fft = n_fft
+        self.hop = hop
+        self.mfcc = T.MFCC(sample_rate=sample_rate, n_mfcc=n_mfcc,
+                           melkwargs=dict(n_fft=n_fft, hop_length=hop,
+                                          n_mels=n_mels))
+        self.mel = T.MelSpectrogram(sample_rate=sample_rate, n_fft=n_fft,
+                                    hop_length=hop, n_mels=n_mels)
+        self.deltas = T.ComputeDeltas()
+
+    def __call__(self, wav: torch.Tensor) -> torch.Tensor:
+        # wav: (1, N) mono at self.sr
+        if wav.dim() == 2:
+            wav = wav.mean(dim=0, keepdim=True)
+        m = self.mfcc(wav)                       # (13, T)
+        d1 = self.deltas(m)
+        d2 = self.deltas(d1)
+        mfcc39 = torch.cat([m, d1, d2], dim=0)   # (39, T)
+        logmel = torch.log(self.mel(wav) + 1e-6) # (64, T)
+        feat = torch.cat([mfcc39, logmel], dim=0).transpose(0, 1)  # (T, 103)
+        # utterance-level normalization
+        mean = feat.mean(dim=0, keepdim=True)
+        std = feat.std(dim=0, keepdim=True) + 1e-6
+        return (feat - mean) / std

@@ -1,0 +1,57 @@
+# Default configuration for CLSER-Net
+seed: 42
+device: cuda
+
+features:
+  sample_rate: 16000
+  n_mfcc: 13
+  n_mels: 64
+  win_ms: 25
+  hop_ms: 10
+  use_deltas: true          # 13 + 13 + 13 = 39 MFCC dims
+  # fused dim = 39 + 64 = 103
+
+model:
+  d_h: 256                  # CLATE hidden dim; output d = 2*d_h = 512
+  num_emotions: 4           # A, H, S, N
+  dropout: 0.3
+  temperature: 0.1          # tau in EPRA softmax
+  prototype_init: xavier_uniform
+
+loss:
+  lambda_attr: 0.1
+  lambda_sep: 0.1
+  margin: 1.0               # m in separation loss
+
+training:
+  batch_size: 32
+  weight_decay: 1.0e-5
+  pretrain_epochs: 50
+  adapt_epochs: 30
+  early_stop_patience: 10
+  eta_base: 1.0e-3
+  gamma: 0.8                # discriminative LR decay
+  unfreeze_interval: 5      # E in Eq. (30)
+  initial_trainable: 2      # U0 in Eq. (30)
+
+# ---- data paths: EDIT THESE ----
+data:
+  iemocap_root: "/path/to/IEMOCAP"
+  ravdess_root: "/path/to/RAVDESS"
+  emodb_root:   "/path/to/EMO-DB"
+  urdu_root:    "/path/to/URDU"
+
+# transfer scenarios
+scenarios:
+  - name: EN_DE
+    source: iemocap
+    target: emodb
+  - name: EN_UR
+    source: iemocap
+    target: urdu
+  - name: RAV_DE
+    source: ravdess
+    target: emodb
+  - name: RAV_UR
+    source: ravdess
+    target: urdu
